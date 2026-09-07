@@ -90,11 +90,11 @@ public class RecipeController {
             @Parameter(name = "includeIngredient", description = "Literal ingredient substring; repeat up to 10 times",
                     in = io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY,
                     style = io.swagger.v3.oas.annotations.enums.ParameterStyle.FORM, explode = io.swagger.v3.oas.annotations.enums.Explode.TRUE,
-                    example = "rice", array = @io.swagger.v3.oas.annotations.media.ArraySchema(schema = @Schema(type = "string", maxLength = 200))),
+                    example = "[\"rice\"]", array = @io.swagger.v3.oas.annotations.media.ArraySchema(schema = @Schema(type = "string", maxLength = 200))),
             @Parameter(name = "excludeIngredient", description = "Literal ingredient substring to exclude; repeat up to 10 times",
                     in = io.swagger.v3.oas.annotations.enums.ParameterIn.QUERY,
                     style = io.swagger.v3.oas.annotations.enums.ParameterStyle.FORM, explode = io.swagger.v3.oas.annotations.enums.Explode.TRUE,
-                    example = "chicken", array = @io.swagger.v3.oas.annotations.media.ArraySchema(schema = @Schema(type = "string", maxLength = 200)))
+                    example = "[\"chicken\"]", array = @io.swagger.v3.oas.annotations.media.ArraySchema(schema = @Schema(type = "string", maxLength = 200)))
     })
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Matching recipe slice",
