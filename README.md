@@ -32,6 +32,37 @@ For an existing database, set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD`. Flyway
 
 Build an executable jar with `./mvnw verify`; run `java -jar target/recipe-api-0.0.1-SNAPSHOT.jar`.
 
+## OpenAPI and Swagger UI
+
+In local and non-production profiles, the interactive Swagger UI is available at
+`http://localhost:8080/docs` and the OpenAPI 3 JSON contract at
+`http://localhost:8080/docs-json`. The contract documents every recipe operation,
+validation bounds, repeatable search filters, response schema, and expected error
+status. The API has no authentication or ownership, so the contract intentionally
+defines no security scheme.
+
+Documentation metadata and its advertised server can be configured without code
+changes:
+
+| Environment variable | Default |
+| --- | --- |
+| `SWAGGER_ENABLED` | `true` outside the `prod` profile; `false` in `prod` |
+| `OPENAPI_TITLE` | `Recipe API` |
+| `OPENAPI_DESCRIPTION` | `Recipe management and bounded, composable recipe search` |
+| `OPENAPI_VERSION` | `1.0.0` |
+| `OPENAPI_SERVER_URL` | `http://localhost:8080` |
+
+The `prod` Spring profile disables both endpoints by default to avoid exposing the
+contract or interactive request tooling unintentionally. Set `SWAGGER_ENABLED=true`
+explicitly only when production documentation access is intended and protected by
+deployment-level access controls. For example:
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE = "prod"
+$env:SWAGGER_ENABLED = "true"
+.\mvnw.cmd spring-boot:run
+```
+
 ## Contract
 
 `docs/technical-specs.md` is authoritative. The implementation follows its `/api/recipes` route convention instead of the shorter routes in the supplemental design decisions. `docs/design-decisions.md` supplies business semantics. Partial updates are out of scope; PATCH is not implemented.
