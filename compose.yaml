@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/recipes
+      DB_USERNAME: recipes
+      DB_PASSWORD: recipes
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:14.17
+    environment:
+      POSTGRES_DB: recipes
+      POSTGRES_USER: recipes
+      POSTGRES_PASSWORD: recipes
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - recipe_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recipes -d recipes"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  recipe_data:

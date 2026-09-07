@@ -11,8 +11,8 @@
 	<groupId>com.kenenthsuarez</groupId>
 	<artifactId>recipe-api</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name/>
-	<description/>
+	<name>Recipe API</name>
+	<description>Recipe management and bounded, composable recipe search</description>
 	<url/>
 	<licenses>
 		<license/>
@@ -30,6 +30,28 @@
 		<java.version>17</java.version>
 	</properties>
 	<dependencies>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-jpa</artifactId>
@@ -60,6 +82,16 @@
 		</dependency>
 	</dependencies>
 
+	<profiles>
+		<profile>
+			<id>postgres-it</id>
+			<build><plugins><plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+				<executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions>
+			</plugin></plugins></build>
+		</profile>
+	</profiles>
 	<build>
 		<plugins>
 			<plugin>
