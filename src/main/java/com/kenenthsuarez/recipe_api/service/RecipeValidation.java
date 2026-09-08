@@ -45,7 +45,7 @@ public class RecipeValidation {
         if (search.servings() != null && search.servings() < 1) {
             throw new InvalidRecipeException("servings must be positive");
         }
-        return new RecipeSearch(search.vegetarian(), search.servings(), terms(search.includeIngredient()),
+        return new RecipeSearch(term(search.title()), search.vegetarian(), search.servings(), terms(search.includeIngredient()),
                 terms(search.excludeIngredient()), term(search.instruction()), search.page(), search.size());
     }
 

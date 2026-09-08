@@ -103,7 +103,10 @@ public class RecipeController {
             @ApiResponse(responseCode = "503", ref = "#/components/responses/ServiceUnavailable")
     })
     @GetMapping
-    public RecipeSlice search(@Parameter(description = "When true, return only vegetarian recipes")
+    public RecipeSlice search(@Parameter(description = "Case-insensitive literal title substring; blank applies no filter", example = "rice",
+                                      schema = @Schema(maxLength = 200))
+                              @RequestParam(required = false) String title,
+                              @Parameter(description = "When true, return only vegetarian recipes")
                               @RequestParam(required = false) Boolean vegetarian,
                               @Parameter(description = "Exact positive serving count", example = "4", schema = @Schema(minimum = "1"))
                               @RequestParam(required = false) Integer servings,
@@ -117,7 +120,7 @@ public class RecipeController {
                               @Parameter(description = "Number of results", example = "20",
                                       schema = @Schema(minimum = "1", maximum = "100", defaultValue = "20"))
                               @RequestParam(defaultValue = "20") int size) {
-        return recipeService.search(new RecipeSearch(vegetarian, servings, parameters.get("includeIngredient"),
+        return recipeService.search(new RecipeSearch(title, vegetarian, servings, parameters.get("includeIngredient"),
                 parameters.get("excludeIngredient"), instruction, page, size));
     }
 }

@@ -45,7 +45,7 @@ class RecipeServiceTest {
 
     @Test
     void sliceLoadsOnlyReturnedIdsAndPreservesRootOrder() {
-        var search = new RecipeSearch(null, null, List.of(), List.of(), null, 0, 1);
+        var search = new RecipeSearch(null, null, null, List.of(), List.of(), null, 0, 1);
         when(validation.normalize(search)).thenReturn(search);
         when(repository.searchRoots(search)).thenReturn(List.of(
                 new RecipeRoot(1L, "A", null, 1, false), new RecipeRoot(2L, "B", null, 1, false)));

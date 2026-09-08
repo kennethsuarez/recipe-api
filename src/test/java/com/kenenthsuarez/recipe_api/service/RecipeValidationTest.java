@@ -9,6 +9,15 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class RecipeValidationTest {
+    @Test
+    void titleSearchIsNormalizedAndBounded() {
+        assertThat(validation.normalize(new RecipeSearch(" Rice ", null, null, null, null, null, 0, 20)).title())
+                .isEqualTo("rice");
+        assertThat(validation.normalize(new RecipeSearch("  ", null, null, null, null, null, 0, 20)).title()).isNull();
+        assertThatThrownBy(() -> validation.normalize(new RecipeSearch("x".repeat(201), null, null, null, null, null, 0, 20)))
+                .isInstanceOf(InvalidRecipeException.class);
+    }
+
     private final RecipeValidation validation = new RecipeValidation(
             Validation.buildDefaultValidatorFactory().getValidator());
 
@@ -34,16 +43,16 @@ class RecipeValidationTest {
     @Test
     void filtersAreTrimmedDeduplicatedAndBounded() {
         ReflectionTestUtils.setField(validation, "maxOffset", 10000);
-        var result = validation.normalize(new RecipeSearch(false, 4, List.of(" Rice ", "rice", " "), null, "  ", 0, 20));
+        var result = validation.normalize(new RecipeSearch(null, false, 4, List.of(" Rice ", "rice", " "), null, "  ", 0, 20));
         assertThat(result.includeIngredient()).containsExactly("rice");
         assertThat(result.instruction()).isNull();
-        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, null, null, null, 101, 100)))
+        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, null, null, null, null, 101, 100)))
                 .isInstanceOf(InvalidRecipeException.class);
-        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, null, null, null, 0, 101)))
+        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, null, null, null, null, 0, 101)))
                 .isInstanceOf(InvalidRecipeException.class);
-        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, 0, null, null, null, 0, 20)))
+        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, 0, null, null, null, 0, 20)))
                 .isInstanceOf(InvalidRecipeException.class);
-        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, List.of("a".repeat(201)), null, null, 0, 20)))
+        assertThatThrownBy(() -> validation.normalize(new RecipeSearch(null, null, null, List.of("a".repeat(201)), null, null, 0, 20)))
                 .isInstanceOf(InvalidRecipeException.class);
     }
 }

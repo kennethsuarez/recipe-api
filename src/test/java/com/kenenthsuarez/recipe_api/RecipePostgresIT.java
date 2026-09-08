@@ -28,6 +28,28 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Testcontainers
 class RecipePostgresIT {
+    @Test
+    void titleSearchIsLiteralCombinesFiltersAndPaginates() throws Exception {
+        create("Rice bowl", true, List.of("beans"), List.of());
+        create("Rice soup", false, List.of("beans"), List.of());
+        create("Pasta", true, List.of("rice"), List.of());
+        create("100%_! Rice", true, List.of("beans"), List.of());
+        mvc.perform(get("/api/recipes").param("title", " RICE ").param("size", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.results[0].title").value("Rice bowl"))
+                .andExpect(jsonPath("$.hasNext").value(true));
+        mvc.perform(get("/api/recipes").param("title", "rice").param("vegetarian", "true")
+                        .param("includeIngredient", "beans"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.results.length()").value(2));
+        mvc.perform(get("/api/recipes").param("title", "%_!"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.results.length()").value(1));
+        mvc.perform(get("/api/recipes").param("title", " "))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.results.length()").value(4));
+        mvc.perform(get("/api/recipes").param("title", "missing"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.results").isEmpty());
+        mvc.perform(get("/api/recipes").param("title", "x".repeat(201)))
+                .andExpect(status().isBadRequest());
+    }
+
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:14.17");
     @DynamicPropertySource
@@ -54,7 +76,7 @@ class RecipePostgresIT {
     }
 
     private RecipeSlice search(List<String> include, List<String> exclude, String instruction) {
-        return service.search(new RecipeSearch(false, 4, include, exclude, instruction, 0, 20));
+        return service.search(new RecipeSearch(null, false, 4, include, exclude, instruction, 0, 20));
     }
 
     @ParameterizedTest
@@ -100,9 +122,9 @@ class RecipePostgresIT {
         assertThat(search(List.of(), List.of(), "preheat oven").results()).isEmpty();
         assertThat(search(List.of(), List.of(), "bake well").results()).isEmpty();
         assertThat(search(List.of(), List.of(), "bake").results()).hasSize(1);
-        assertThat(service.search(new RecipeSearch(true, null, null, null, null, 0, 20)).results()).hasSize(1);
-        assertThat(service.search(new RecipeSearch(false, null, null, null, null, 0, 20)).results()).hasSize(2);
-        assertThat(service.search(new RecipeSearch(null, 3, null, null, null, 0, 20)).results()).isEmpty();
+        assertThat(service.search(new RecipeSearch(null, true, null, null, null, null, 0, 20)).results()).hasSize(1);
+        assertThat(service.search(new RecipeSearch(null, false, null, null, null, null, 0, 20)).results()).hasSize(2);
+        assertThat(service.search(new RecipeSearch(null, null, 3, null, null, null, 0, 20)).results()).isEmpty();
     }
 
     @Test

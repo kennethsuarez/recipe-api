@@ -17,6 +17,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(RecipeController.class)
 class RecipeControllerTest {
+    @Test
+    void bindsTitleAlongsideOtherFilters() throws Exception {
+        when(service.search(any())).thenReturn(new RecipeSlice(List.of(), 0, 20, false));
+        mvc.perform(get("/api/recipes").param("title", "Rice").param("vegetarian", "true"))
+                .andExpect(status().isOk());
+        verify(service).search(argThat(search -> "Rice".equals(search.title()) && Boolean.TRUE.equals(search.vegetarian())));
+    }
+
     @Autowired MockMvc mvc;
     @MockitoBean
     RecipeServiceImpl service;

@@ -238,7 +238,3 @@ Run those suites plus PostgreSQL integration checks with a working Docker engine
 ```
 
 On macOS/Linux use `./mvnw`. The integration profile starts its own disposable PostgreSQL 14.17 container and does not silently skip when Docker is missing.
-
-For query-plan evaluation, run `psql -v ON_ERROR_STOP=1 -f docs/explain-search.sql` against a disposable migrated database. Inspect actual rows, execution time, and buffers for selective and broad searches; the script rolls back its fixtures.
-
-**Evidence and limits:** An earlier implementation build passed 14 database-independent tests and produced the executable jar. Its PostgreSQL run could not start because Docker was unavailable, and the Compose runtime was not verified then. Those results predate subsequent service-interface and Swagger changes and are not a claim of fresh verification of the current checkout. This README update changes documentation only. Run the commands above before presenting current test results; PostgreSQL assertions, measured plans, and deployment/load behavior must not be presented as verified without their corresponding successful runs.

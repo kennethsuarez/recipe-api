@@ -21,6 +21,9 @@ public class RecipeReadRepositoryImpl implements RecipeReadRepository {
         CriteriaQuery<RecipeRoot> query = cb.createQuery(RecipeRoot.class);
         Root<Recipe> root = query.from(Recipe.class);
         List<Predicate> predicates = new ArrayList<>();
+        if (search.title() != null) {
+            predicates.add(cb.like(cb.lower(root.get("title")), literalPattern(search.title()), '!'));
+        }
         if (Boolean.TRUE.equals(search.vegetarian())) {
             predicates.add(cb.isTrue(root.get("vegetarian")));
         }
@@ -47,9 +50,12 @@ public class RecipeReadRepositoryImpl implements RecipeReadRepository {
                                String term, CriteriaBuilder cb) {
         Subquery<Integer> subquery = query.subquery(Integer.class);
         ListJoin<Recipe, String> entry = subquery.correlate(root).joinList(collection);
-        String pattern = "%" + term.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
-        subquery.select(cb.literal(1)).where(cb.like(cb.lower(entry), pattern, '!'));
+        subquery.select(cb.literal(1)).where(cb.like(cb.lower(entry), literalPattern(term), '!'));
         return cb.exists(subquery);
+    }
+
+    private String literalPattern(String term) {
+        return "%" + term.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
 
     @Override
