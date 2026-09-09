@@ -78,150 +78,72 @@ curl "http://localhost:8080/api/recipes?vegetarian=true&servings=4&includeIngred
 
 ## Design decisions and rationale
 
-This section explains the current implementation, the problem each choice addresses, and its tradeoffs. The technology stack and several business rules come from the assignment; they are not all discretionary architecture choices.
+Five decisions that shaped this implementation, each made with scaling in mind, not just correctness.
 
-### 1. Explicit layers and constructor injection
-
-**Choice:** Requests follow this path:
+### 1. Business layers and logic
 
 ```text
-RecipeController
-      |
-RecipeService -> RecipeServiceImpl
-      |              |
-      |        RecipeValidation / RecipeMapper
-      |
-RecipeRepository + RecipeReadRepositoryImpl
-      |
-PostgreSQL
+RecipeController -> RecipeServiceImpl -> RecipeRepository / RecipeReadRepositoryImpl -> PostgreSQL
+                          |
+              RecipeValidation / RecipeMapper
 ```
 
-The controller handles routes, request binding, validation entry points, and HTTP responses. The service coordinates application rules and transactions. Repositories own persistence queries. Dependencies are constructor-injected, with final fields where appropriate.
+- Single Responsibility: Controllers only bind/validate requests and translate to HTTP responses. `RecipeServiceImpl` owns transactions and orchestration. `RecipeValidation` (normalization, business rules) and `RecipeMapper` (entity/DTO conversion) each have one job, used by every write and read path instead of being duplicated per endpoint.
 
-**Why:** This follows single responsibility (separation of concern) and makes responsibilities easy to locate and test. Changing an HTTP response should not require editing persistence logic, and a controller test should not need PostgreSQL.
-
-
-### 2. Separate request, response, and persistence models
-
-**Choice:** Use Java records for `RecipeRequest`, `RecipeResponse`, `RecipeSearch`, and `RecipeSlice`; keep the mutable JPA `Recipe` entity separate. Response records copy their lists with `List.copyOf`.
-
-**Why:** Clients receive an explicit API contract rather than Hibernate-managed objects. This avoids exposing persistence details or allowing serialization to traverse lazy associations. Defensive list copies keep responses independent of subsequent changes to managed collections.
-
-POST and PUT share `RecipeRequest` because both accept the same complete set of fields and validation rules. Separate create/update DTOs would currently duplicate that contract.
-
-**Tradeoff:** Mapping is required. Records make fields final but do not automatically make referenced collections immutable, which is why response lists are copied. If creation and replacement rules diverge, separate request types would become useful.
-
-### 3. A dedicated mapper rather than builders in service methods
-
-**Choice:** `RecipeMapper` contains `toEntity`, `replace`, and two `toResponse` methods.
-
-**Why:** Creation, replacement, detail reads, and search all need the same field mapping. Centralizing it avoids repeated assignments and keeps services focused on the operation. One response method maps an entity used by writes; the other maps the projections used by reads.
-
-A builder is a way to construct an object; it does not remove the need to decide how fields map. Building responses inside both service methods would duplicate that decision. The response record constructor is sufficient for this small model.
-
-**Tradeoff:** Manual mapping must be updated when fields change. MapStruct or a builder inside the mapper could help if the model becomes substantially larger, but neither is necessary here. Replacement mutates the existing managed entity and its lists, preserving its identity and version rather than constructing a replacement entity.
-
-### 4. Recipe as the owner of two ordered value collections
-
-**Choice:** Store recipe fields in `recipes`, ingredients in `recipe_ingredients`, and steps in `recipe_instructions`. Map the children as lazy `@ElementCollection` lists with an `@OrderColumn`.
+### 2. Pipeline: PR to deployment
 
 ```text
-recipes
-  id (PK)
-  version, title, description, servings, vegetarian
-      |
-      +-- recipe_ingredients
-      |     recipe_id (PK, FK), position (PK), text
-      |
-      +-- recipe_instructions
-            recipe_id (PK, FK), position (PK), text
+push/PR -> unit+controller tests -> Postgres integration tests -> SonarQube gate -> [main only] build+push image -> ECS deploy
+```
+- The SonarQube quality gate blocks the image build entirely; nothing unreviewed reaches ECR.
+- Deploys happen only on `main`, authenticated via a GitHub OIDC role scoped to exactly this repo and this ECS service
+
+### 3. ERD
+
+```mermaid
+erDiagram
+    recipes ||--|{ recipe_ingredients : contains
+    recipes ||--o{ recipe_instructions : has
+
+    recipes {
+        bigint id PK
+        bigint version "Optimistic locking"
+        varchar(200) title
+        varchar(10000) description "Optional"
+        integer servings "Positive"
+        boolean vegetarian "Default false"
+    }
+
+    recipe_ingredients {
+        bigint recipe_id PK,FK
+        integer position PK "Zero-based order"
+        varchar(1000) text
+    }
+
+    recipe_instructions {
+        bigint recipe_id PK,FK
+        integer position PK "Zero-based order"
+        varchar(2000) text
+    }
 ```
 
-**Why:** An ingredient entry or instruction has no independent lifecycle or public identity in this assignment. Both belong to one recipe and preserve the author's order. Separate child tables support per-entry searching and explicit relational constraints.
+- Ingredients/instructions are ordered child tables. They have no identity or lifecycle of their own, but living in real rows lets each entry be indexed and searched individually.
+- `version` backs optimistic locking on the whole aggregate; a `PUT` or child-list replacement always advances it, so two overlapping writes can't silently clobber each other (`409` instead).
+- Normalized children plus `(recipe_id, position)` keys keep bulk reads (below) to simple, indexable range scans instead of unpacking a JSON column per row.
 
-**Tradeoff:** Full list replacement may generate multiple deletes, updates, or inserts. Bounded lists and JDBC batching limit the work, but generated SQL still needs inspection. Independently editable children with stable IDs would justify child entities later. JSON storage would make the current per-entry indexing and querying a different design problem.
+### 4. Search implementation (trigram, etc.)
 
-### 5. Literal substring matching and aligned indexes
+- Title/ingredient/instruction substring filters use `lower(text) LIKE` with escaped wildcards through parameterized Criteria queries. It is matched by PostgreSQL `pg_trgm` GIN indexes on that same `lower(text)` expression.
+- Include/exclude ingredient filters use correlated `EXISTS`/`NOT EXISTS` subqueries rather than joins, so multiple matching ingredients don't duplicate the recipe row, and "excluded" genuinely means "matches nowhere in the list."
+- Each page is assembled from exactly three queries (one bounded root-page query, one bulk ingredients query, one bulk instructions query) instead of a fetch-joined entity graph, so query count stays flat whether the page has 1 or 100 recipes (verified directly via Hibernate statement counts in `RecipePostgresIT`).
+- **Trigram** indexes turn substring search from a full scan into an indexed lookup; `EXISTS` avoids join-induced row multiplication; the three-query shape is what keeps N+1 from appearing as the dataset grows.
 
-**Choice:** Normalize search terms with trimming and `Locale.ROOT` lowercasing, then use `lower(text) LIKE` with escaped pattern characters. The escape character `!` is itself escaped, followed by `%` and `_`.
+### 5. Rate limiting
 
-**Why:** User input is text to find, not a SQL wildcard language. Criteria supplies values through the ORM query mechanism rather than concatenating user input into SQL. Repeated ingredient parameters preserve commas within a term as literal text. Blank terms are ignored.
-
-GIN trigram indexes on `lower(text)` match the expression used by the query. Ordinary B-tree text indexes do not generally solve leading-wildcard substring searches.
-
-**Tradeoff:** Trigram indexes consume storage and increase write work. Short terms, common terms, and exclusion-only searches may still scan many rows. Index presence is not proof of a fast plan, and there is no stemming, synonym expansion, fuzzy matching, or relevance ranking. Cross-language case behavior would deserve explicit tests if multilingual search became a product requirement.
-
-### 6. Three-query DTO assembly instead of collection fetch joins
-
-**Choice:** For a nonempty slice, select the root page, fetch all its ingredients in one query, and fetch all its instructions in another. Detail reads use the same assembly approach. An empty slice needs only the root query.
-
-**Why:** Lazy loading both lists for 20 entities could cause 41 SELECTs. Joining both lists can multiply rows: 10 ingredients and 8 steps yield 80 rows for one recipe. Separate bulk reads avoid both problems and keep the intended SELECT count independent of page size.
-
-Child queries load every child for the returned IDs, not just matching children. Assembly preserves the original root order because an IN clause alone does not guarantee ordering.
-
-**Tradeoff:** This needs repository projection records (`RecipeRoot` and `RecipeChild`) and service assembly code. It is a deliberate performance reason for repository projections; public response DTOs are still assembled outside repositories. Three queries bound round trips, not scanned rows or total execution time. The query-count target applies to these reads, not all write operations.
-
-### 7. Count-free slices and bounded offsets
-
-**Choice:** Fetch `size + 1` root rows, use the extra row for `hasNext`, and load children only for the returned page. Return results, page, size, and hasNext without an exact total.
-
-**Why:** A client can navigate forward without paying for a count query on every search. Limits are applied to root rows in SQL before children are loaded. ID-ascending ordering makes results deterministic within the query snapshot.
-
-**Tradeoff:** The response cannot directly display an exact number of pages. Offset pagination becomes expensive at depth, so page size is 1–100 (default 20), and offset is capped at 10,000 by default. Keyset pagination is the deferred extension for deep browsing. Separate page requests are not one shared snapshot and can shift as data changes.
-
-### 8. Service transactions and consistent reads
-
-**Choice:** Writes are transactional. Multi-query read assembly uses short read-only repeatable-read transactions. Open Session in View is disabled, and Hibernate is configured to fail on collection-fetch pagination.
-
-**Why:** A recipe's root fields and lists must be updated atomically. For reads, repeatable-read keeps all three queries on one database snapshot; read-committed could combine old root data with newly committed children. DTO construction completes before the transaction ends, and HTTP serialization happens afterward.
-
-PUT does not need a second save call because the loaded entity is managed and Hibernate detects changes. DELETE explicitly flushes pending work, while final commit remains within the service transaction boundary.
-
-**Tradeoff:** A snapshot holds database resources for its duration. Bounds and timeouts matter, and these transactions should never include remote calls or response transmission. Turning off OSIV also means newly added lazy-access code must stay inside an appropriate transaction.
-
-### 9. Optimistic locking for overlapping writes
-
-**Choice:** Put `@Version` on the recipe aggregate and use `OPTIMISTIC_FORCE_INCREMENT` when loading for replacement. Deletion participates in version checking.
-
-**Why:** Concurrent writers should not silently overwrite one another. Forcing a parent version increment also covers child-only or identical replacements. On conflict, the transaction rolls back, including child changes, and the API returns 409.
-
-**Tradeoff:** This protects overlapping server transactions. It does not detect an old form submitted after another write has already committed, because the request supplies no expected version. ETag/If-Match or an explicit client version would address that separate problem. Optimistic locking avoids deliberately locking reads, but writes still take normal database locks and may conflict.
-
-### 10. Finite payload and query limits
-
-**Choice:** Enforce these initial limits:
-
-| Input | Limit | Reason |
-| --- | --- | --- |
-| Title | 200 characters | Bound a short identifying field |
-| Description | 10,000 characters | Allow paragraphs while bounding payloads |
-| Ingredient entry | 1,000 characters | Allow quantities and preparation notes |
-| Instruction step | 2,000 characters | Allow detailed steps |
-| Ingredients / instructions | 1–100 / 0–100 entries | Bound collection reads and replacement work |
-| Search term | 200 characters | Bound each matching predicate |
-| Include / exclude filters | 10 terms each before deduplication | Bound predicate count |
-| Raw request body | 512 KiB | Bound buffering and JSON parsing input |
-| Page size / offset | 100 / 10,000 maximum by default | Bound returned data and deep browsing |
-
-**Why:** A page-size limit alone is insufficient if every recipe contains unlimited text and children. `RequestLimitsFilter` checks declared length and reads at most the body limit plus one byte, covering requests without Content-Length.
-
-### 11. Admission control, timeouts, and batching
-
-**Choice:** Use a non-waiting semaphore for recipe requests, a bounded Tomcat task queue, finite connection/thread settings, database deadlines, and JDBC batching.
-
-**Why:** Unbounded waiting can turn a temporary overload into thread and memory exhaustion. The semaphore rejects detected saturation with 503 instead of building another application queue; permits are released in finally. Database deadlines limit slow work, while batching can reduce write round trips.
-
-**Tradeoff:** There may be bounded waiting at different layers, and requests rejected at connector level may never receive an application-generated HTTP response. Production admission control should act before that boundary. The semaphore is per instance, not a global rate limiter; no 429 rate limiter is implemented. Pool budgets must account for all replicas and leave database capacity for operations. These numbers are configuration choices, not evidence of throughput capacity.
-
-### 12. Tests that target risks at the appropriate boundary
-
-**Choice:** Use focused unit tests, controller slices with a mocked service, and an explicit PostgreSQL Testcontainers integration profile.
-
-**Why:** Fast tests cover normalization, service coordination, HTTP validation/statuses, literal comma binding, and admission/body limits. PostgreSQL tests exercise the actual migrations and provider behavior, which mocked repositories cannot establish. An in-memory substitute would not establish pg_trgm or PostgreSQL timeout behavior.
-
-The integration suite checks 1/20/100-result query counts through HTTP serialization, complete ordered children, filtering/exclusion, atomic rollback, and overlapping write conflicts. It checks configured statement/lock timeout values and actively exercises statement cancellation.
-
-**Tradeoff:** Docker is required for the integration profile. Current persistence checks are in a full Spring Boot integration suite, not a separate @DataJpaTest slice. A dedicated repository slice could help if query logic grows. Lock-contention timing, connector saturation, and production capacity still require additional targeted checks; configured values alone do not prove them.
+- `RequestLimitsFilter` caps request body size and uses a non-waiting semaphore to bound concurrent in-flight requests. Once saturated, it returns `503` with `Retry-After` immediately instead of queuing indefinitely.
+- Backed by bounded Tomcat thread/connection/queue settings and database statement/lock timeouts, so a burst of slow requests can't exhaust threads or hold connections open indefinitely.
+- **Honest gap:** There is no `429` style quota yet. The intended production solution is an AWS WAF rate-based rule at the load balancer (per-IP throttling before traffic reaches the container), not something rebuilt in the application layer.
+- Rejecting fast under load beats an unbounded queue that eventually exhausts memory. The whole design favors bounded, predictable failure over silent degradation.
 
 ## Verification
 
@@ -243,4 +165,4 @@ For query-plan evaluation, run `psql -v ON_ERROR_STOP=1 -f scripts/explain-searc
 
 ## CI/CD
 
-[.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml) runs on every push/PR: `./mvnw verify` (unit/controller tests plus JaCoco coverage), the `postgres-it` Testcontainers profile, a SonarQube scan with an enforced quality gate, then — on `main` only, after the gate passes — an image build/push to ECR and an App Runner deployment. AWS is provisioned once by hand (no Terraform/CDK; this is a showcase pipeline, not production IaC) — see [DEPLOYMENT.md](docs/DEPLOYMENT.md) for the setup/teardown commands and the GitHub secrets/variables the workflow expects.
+[.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml) runs on every push/PR: `./mvnw verify` (unit/controller tests plus JaCoco coverage), the `postgres-it` Testcontainers profile, a SonarQube scan with an enforced quality gate, then — on `main` only, after the gate passes — an image build/push to ECR and an ECS deployment. AWS is provisioned once by hand (no Terraform/CDK; this is a showcase pipeline, not production IaC) — see [DEPLOYMENT.md](DEPLOYMENT.md) for the setup/teardown commands and the GitHub secrets/variables the workflow expects.
