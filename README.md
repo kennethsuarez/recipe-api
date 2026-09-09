@@ -238,3 +238,9 @@ Run those suites plus PostgreSQL integration checks with a working Docker engine
 ```
 
 On macOS/Linux use `./mvnw`. The integration profile starts its own disposable PostgreSQL 14.17 container and does not silently skip when Docker is missing.
+
+For query-plan evaluation, run `psql -v ON_ERROR_STOP=1 -f scripts/explain-search.sql` against a disposable migrated database. Inspect actual rows, execution time, and buffers for selective and broad searches; the script rolls back its fixtures.
+
+## CI/CD
+
+[.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml) runs on every push/PR: `./mvnw verify` (unit/controller tests plus JaCoco coverage), the `postgres-it` Testcontainers profile, a SonarQube scan with an enforced quality gate, then — on `main` only, after the gate passes — an image build/push to ECR and an App Runner deployment. AWS is provisioned once by hand (no Terraform/CDK; this is a showcase pipeline, not production IaC) — see [DEPLOYMENT.md](docs/DEPLOYMENT.md) for the setup/teardown commands and the GitHub secrets/variables the workflow expects.
