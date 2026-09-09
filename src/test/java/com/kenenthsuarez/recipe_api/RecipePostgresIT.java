@@ -9,6 +9,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.CacheManager;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -65,10 +66,12 @@ class RecipePostgresIT {
     @Autowired EntityManagerFactory factory;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired CacheManager cacheManager;
 
     @BeforeEach
     void clean() {
         jdbc.execute("TRUNCATE recipes CASCADE");
+        cacheManager.getCache("recipeSearch").clear();
     }
 
     private RecipeResponse create(String title, boolean vegetarian, List<String> ingredients, List<String> steps) {
@@ -125,6 +128,35 @@ class RecipePostgresIT {
         assertThat(service.search(new RecipeSearch(null, true, null, null, null, null, 0, 20)).results()).hasSize(1);
         assertThat(service.search(new RecipeSearch(null, false, null, null, null, null, 0, 20)).results()).hasSize(2);
         assertThat(service.search(new RecipeSearch(null, null, 3, null, null, null, 0, 20)).results()).isEmpty();
+    }
+
+    @Test
+    void searchIsCachedAndEvictedOnlyAfterCommittedWrites() {
+        create("Rice bowl", false, List.of("rice"), List.of());
+        var search = new RecipeSearch(null, null, null, List.of("rice"), List.of(), null, 0, 20);
+        var statistics = factory.unwrap(SessionFactory.class).getStatistics();
+
+        statistics.clear();
+        assertThat(service.search(search).results()).hasSize(1);
+        assertThat(statistics.getPrepareStatementCount()).isGreaterThan(0);
+
+        statistics.clear();
+        assertThat(service.search(search).results()).hasSize(1);
+        assertThat(statistics.getPrepareStatementCount()).isZero();
+
+        var transaction = new TransactionTemplate(transactionManager);
+        assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+            create("Rice pilaf", false, List.of("rice"), List.of());
+            throw new IllegalStateException("rollback");
+        })).isInstanceOf(IllegalStateException.class);
+        statistics.clear();
+        assertThat(service.search(search).results()).hasSize(1);
+        assertThat(statistics.getPrepareStatementCount()).isZero();
+
+        create("Rice pilaf", false, List.of("rice"), List.of());
+        statistics.clear();
+        assertThat(service.search(search).results()).hasSize(2);
+        assertThat(statistics.getPrepareStatementCount()).isGreaterThan(0);
     }
 
     @Test

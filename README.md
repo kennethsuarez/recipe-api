@@ -145,6 +145,13 @@ erDiagram
 - **Honest gap:** There is no `429` style quota yet. The intended production solution is an AWS WAF rate-based rule at the load balancer (per-IP throttling before traffic reaches the container), not something rebuilt in the application layer.
 - Rejecting fast under load beats an unbounded queue that eventually exhausts memory. The whole design favors bounded, predictable failure over silent degradation.
 
+### 6. Search result caching
+
+- `search()` is `@Cacheable` into a single Caffeine region (`recipeSearch`), keyed on the full filter/pagination combination. Caffeine over Redis because the service currently runs as one ECS task. 
+- Writes never call `@CacheEvict` directly. `create`/`replace`/`delete` register an **afterCommit** transaction synchronization that clears the whole region. Evicting inline on a `@Transactional` method isn't guaranteed to run after the commit, so a naive stacked annotation could clear the cache before the write is durable, or clear it on a write that then rolls back.
+- Bounded to 500 entries with a 30s `expireAfterWrite` TTL (both env-configurable), so even a missed eviction self-heals quickly instead of serving stale data indefinitely.
+- **Caveat:** Any write clears every cached search, not just the ones it actually affects,  and the cache is per-instance, so scaling past one task reintroduces up to the TTL window of staleness on other instances until a shared cache (Redis) replaces it. 
+
 ## Verification
 
 Run the database-independent unit and controller suites:
@@ -162,6 +169,55 @@ Run those suites plus PostgreSQL integration checks with a working Docker engine
 On macOS/Linux use `./mvnw`. The integration profile starts its own disposable PostgreSQL 14.17 container and does not silently skip when Docker is missing.
 
 For query-plan evaluation, run `psql -v ON_ERROR_STOP=1 -f scripts/explain-search.sql` against a disposable migrated database. Inspect actual rows, execution time, and buffers for selective and broad searches; the script rolls back its fixtures.
+
+### Large-dataset search benchmark
+
+The persistent generator creates varied recipes with 5–15 ingredients and 3–10
+instruction steps. It includes common terms such as `rice`, less common `chicken`,
+and rare `saffron` and `sous-vide` terms so both selective and broad searches can
+be measured. Use a disposable database because 100,000 recipes produce roughly
+one million ingredient rows and hundreds of thousands of instruction rows.
+
+With the Compose database running, copy and run the scripts inside PostgreSQL:
+
+```powershell
+docker compose up -d postgres
+docker compose cp scripts/generate-load-data.sql postgres:/tmp/generate-load-data.sql
+docker compose exec postgres psql -U recipes -d recipes -v recipe_count=100000 -v batch_id=perf-100k -f /tmp/generate-load-data.sql
+
+docker compose cp scripts/benchmark-search.sql postgres:/tmp/benchmark-search.sql
+docker compose exec postgres psql -U recipes -d recipes -f /tmp/benchmark-search.sql
+```
+
+Increase `recipe_count` to `1000000` for a longer, larger test. Generation is
+deterministic for a given row count, uses set-based inserts, leaves the data in
+place, and runs `VACUUM (ANALYZE)` when finished. Each invocation gets a batch marker in
+the description; use a unique `batch_id` so it can be removed precisely:
+
+```powershell
+docker compose cp scripts/cleanup-load-data.sql postgres:/tmp/cleanup-load-data.sql
+docker compose exec postgres psql -U recipes -d recipes -v batch_id=perf-100k -f /tmp/cleanup-load-data.sql
+```
+
+`benchmark-search.sql` runs `EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS)` for
+selective and common title searches, combined filters, instruction search, broad
+exclusion, the maximum allowed offset, and the bulk ingredient read. Run it more
+than once: the first pass includes cold-cache effects, while later passes show a
+warm database cache. Compare execution time, actual versus estimated rows, buffer
+reads/hits, scan type, and trigram index usage. Query-count bounds prevent N+1;
+they do not guarantee low execution time when a filter matches most rows.
+
+To include HTTP handling, DTO assembly, both child queries, and JSON serialization,
+start the API and run the sequential latency benchmark:
+
+```powershell
+.\scripts\benchmark-api.ps1 -Iterations 100 -WarmupIterations 10
+```
+
+It reports minimum, average, p50, p95, p99, and maximum latency for six search
+shapes. This is a repeatable latency check from one client, not a concurrent load
+or capacity test. Use a dedicated tool such as k6 or Gatling later to establish
+throughput and saturation behavior with controlled concurrency.
 
 ## CI/CD
 

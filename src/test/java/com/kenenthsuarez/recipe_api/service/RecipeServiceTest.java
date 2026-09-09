@@ -6,6 +6,7 @@ import com.kenenthsuarez.recipe_api.exception.RecipeNotFoundException;
 import com.kenenthsuarez.recipe_api.mapper.RecipeMapper;
 import com.kenenthsuarez.recipe_api.repository.*;
 import org.junit.jupiter.api.Test;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -13,7 +14,8 @@ import static org.mockito.Mockito.*;
 class RecipeServiceTest {
     private final RecipeRepository repository = mock(RecipeRepository.class);
     private final RecipeValidation validation = mock(RecipeValidation.class);
-    private final RecipeServiceImpl service = new RecipeServiceImpl(repository, new RecipeMapper(), validation);
+    private final RecipeServiceImpl service = new RecipeServiceImpl(repository, new RecipeMapper(), validation,
+            new ConcurrentMapCacheManager("recipeSearch"));
 
     @Test
     void missingReadsAndWritesFail() {
