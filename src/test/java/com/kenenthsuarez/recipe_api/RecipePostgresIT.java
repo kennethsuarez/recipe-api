@@ -185,6 +185,6 @@ class RecipePostgresIT {
         assertThat(jdbc.queryForObject("SHOW statement_timeout", String.class)).isEqualTo("3s");
         assertThat(jdbc.queryForObject("SHOW lock_timeout", String.class)).isEqualTo("1s");
         assertThatThrownBy(() -> jdbc.execute("SELECT pg_sleep(5)"))
-                .isInstanceOf(org.springframework.dao.QueryTimeoutException.class);
+                .isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
     }
 }
